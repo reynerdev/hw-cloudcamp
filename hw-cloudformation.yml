@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation CloudCamp EC2 with SQS
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 100.15.0.0/16
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: us-east-1a
+      VpcId: !Ref Vpc
+      CidrBlock: 100.15.1.0/24
+      DeletionPolicy: Delete
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 100.15.2.0/24
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      AllocationId: !GetAtt EIP.AllocationId
+  EIP:
+    Type: AWS::EC2::EIP
+  PrivateInternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+  InternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  SecurityGroupEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic for EC2
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+  InstanceProducer:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - PrivateSubnetRouteTableAssociation
+    Properties:
+      ImageId: ami-0fff1b9a61dec8a5f
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+      InstanceType: t2.micro
+      SubnetId: !Ref PrivateSubnet
+      Tags:
+        - Key: Name
+          Value: InstanceProducer
+  InstanceConsumer:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - PrivateSubnetRouteTableAssociation
+    Properties:
+      ImageId: ami-0fff1b9a61dec8a5f
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+      SubnetId: !Ref PrivateSubnet
+      Tags:
+        - Key: Name
+          Value: InstanceConsumer
+
+  SQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: ProducerConsumerQueue
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DelaySeconds: 30
+      TopicName: ProducerConsumerTopic
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: hreloza@gmail.com
+      TopicArn: !Ref SNSTopic
+
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref SQSQueue
+      PolicyDocument: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "SQS:SendMessage",
+              "Resource": "*"
+            }
+          ]
+        }
+
+  SQSQueueToSNS:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt SQSQueue.Arn
+      Protocol: sqs
+      TopicArn: !Ref SNSTopic
+
+  SQSVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.us-east-1.sqs
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+
+  SNSVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.us-east-1.sns
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
